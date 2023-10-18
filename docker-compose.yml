@@ -1,0 +1,9 @@
+services:
+  data-json:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/api
+    ports:
+      - 8000:80
