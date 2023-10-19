@@ -1,26 +1,14 @@
-import fitz
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+import pandas as pd
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse
-from tabula import read_pdf
-
-
-#print(config('port'))
-def convertir_a_json_compatible(data):
-    if isinstance(data, list):
-        return [convertir_a_json_compatible(item) for item in data]
-    elif isinstance(data, dict):
-        return {convertir_a_json_compatible(key): convertir_a_json_compatible(value) for key, value in data.items()}
-    elif isinstance(data, float):
-        return round(data, 2)  # Redondear los valores float a 2 decimales
-    else:
-        return data
+from io import BytesIO
 
 app = FastAPI()
 
 @app.get("/", response_class=HTMLResponse)
 def index():
     return """
-  <html lang="en">
+     <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -38,11 +26,11 @@ def index():
         <div class="view">
             <h4></h4>
             <!-- <form action="/upload" method="post" enctype="multipart/form-data">
-                <input type="file" name="pdfFile">
+                <input type="file" name="excel_file">
                 <input id="button" type="submit" value="upload">
             </form> -->
             <form action="/upload" method="post" enctype="multipart/form-data">
-              <input type="file" name="pdf_file" accept=".pdf">
+              <input type="file" name="excel_file" accept=".xls', '.xlsx">
               <input type="submit" value="Subir PDF">
           </form>
         </div>
@@ -52,54 +40,60 @@ def index():
 </html>
     """
 
-def convertir_a_json_compatible(data):
-    if isinstance(data, list):
-        return [convertir_a_json_compatible(item) for item in data]
-    elif isinstance(data, dict):
-        return {convertir_a_json_compatible(key): convertir_a_json_compatible(value) for key, value in data.items()}
-    elif isinstance(data, float):
-        if data < 1e308 and data > -1e308:  # Verificar si el valor está dentro del rango permitido
-            return round(data, 2)  # Redondear los valores float a 2 decimales
-        else:
-            return str(data)  # Convertir el valor a una cadena si está fuera de rango
-    else:
-        return data
-
 @app.post("/upload/")
-async def upload_file(pdf_file: UploadFile = File(...)):
+async def upload_file(excel_file: UploadFile = File(...)):
     try:
-        print(f"Recibido archivo: {pdf_file.filename}")
+        # Validar que es un archivo Excel
+        if not excel_file.filename.endswith(('.xls', '.xlsx')):
+            raise HTTPException(status_code=400, detail="El archivo debe ser un archivo de Excel (xls o xlsx).")
         
-        if not pdf_file.filename.endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="El archivo debe ser un PDF.")
+        # Leer el archivo directamente en un DataFrame
+        excel_buffer = BytesIO(excel_file.file.read())
+        excel_data = pd.read_excel(excel_buffer, engine='openpyxl')
+        print(excel_data)
+
+        # Procesar el DataFrame
+        json_data = {"hoteles": []}
+        current_hotel = None
+        current_room = None
+
+        for index, row in excel_data.iterrows():
+            hotel_name = row["Hotel"]
+            room_name = row["Tipo de Habitación"]
+            desde = row["Desde"]
+            hasta = row["Hasta"]
+            descuento = row["Descuento"]
+            sencilla = row["Sencilla"]
+            doble_adicional = row["Doble Adicional"]
+            niño = row["Niño"]
         
-        # Guardar el archivo en el sistema
-        pdf_path = f'uploads/{pdf_file.filename}'
-        with open(pdf_path, 'wb') as buffer:
-            buffer.write(pdf_file.file.read())
-        
-     
+            if hotel_name != current_hotel:
+                current_hotel = hotel_name
+                current_room = None
+                json_data["hoteles"].append({
+                    "nombre": current_hotel,
+                    "habitaciones": []
+                })
 
-        #Extraer texto del PDF
-        # doc=fitz.open(pdf_path)
-        # text = ""
-        # for page in doc:
-        #     page_text = page.get_text()
-        #     page_text = page_text.replace('Fechas de viaje', '').replace('*Última noche de alojamiento en el hotel.', '')
-        #     text += page_text
-        # doc.close()
+            if room_name != current_room:
+                current_room = room_name
+                json_data["hoteles"][-1]["habitaciones"].append({
+                    "nombre": current_room,
+                    "tarifas": []
+                })
 
-      
+            json_data["hoteles"][-1]["habitaciones"][-1]["tarifas"].append({
+                "desde": desde.strftime("%d-%b-%y"),
+                "hasta": hasta.strftime("%d-%b-%y"),
+                "descuento": f"{descuento:.2f}%",
+                "precios": {
+                    "sencilla": f"{sencilla:.2f}",
+                    "doble_adicional": f"{doble_adicional:.2f}",
+                    "niño": f"{niño:.2f}"
+                }
+            })
 
-        # Extraer tablas
-        tables = read_pdf(pdf_path, pages='all', multiple_tables=True)
-
-        table_data = []
-        for table in tables:
-            table_data.append(convertir_a_json_compatible(table.to_dict()))
-        # text = convertir_a_json_compatible(text)
-
-        return {'tables': table_data }
+        return json_data
 
     except HTTPException:
         raise
